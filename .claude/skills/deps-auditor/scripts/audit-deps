@@ -1,0 +1,199 @@
+#!/usr/bin/env node
+'use strict'
+
+const { execFileSync } = require('node:child_process')
+
+const SECTIONS = ['dependencies', 'devDependencies']
+const VERSION_PATTERN = /(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?/
+const NON_VERSION_PROTOCOL_PATTERN = /^(git\+|file:|link:|git:|https?:)/
+const GIT_OUTPUT_LIMIT = 64 * 1024 * 1024
+
+function fail(message) {
+	process.stderr.write(`audit-deps: ${message}\n`)
+	process.exit(1)
+}
+
+function git(args, { allowFailure = false } = {}) {
+	try {
+		return execFileSync('git', args, { encoding: 'utf8', maxBuffer: GIT_OUTPUT_LIMIT })
+	} catch (error) {
+		if (allowFailure) return null
+		fail(`git ${args.join(' ')} failed: ${String(error.stderr || error.message).trim()}`)
+	}
+}
+
+function parseArguments(argv) {
+	const flags = {}
+	for (let index = 0; index < argv.length; index += 2) {
+		const flag = argv[index]
+		const value = argv[index + 1]
+		if (value === undefined) fail(`${flag} requires a value`)
+		if (flag !== '--from' && flag !== '--to') fail(`unknown flag: ${flag}`)
+		if (flags[flag] !== undefined) fail(`${flag} given more than once`)
+		flags[flag] = value
+	}
+	if (flags['--from'] === undefined) fail('--from is required (a commit, tag, branch or SHA)')
+	if (flags['--to'] === undefined) fail('--to is required (a commit, tag, branch or SHA)')
+	return { from: flags['--from'], to: flags['--to'] }
+}
+
+function resolveCommit(ref) {
+	const resolved = git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { allowFailure: true })
+	if (resolved === null || resolved.trim() === '') fail(`cannot resolve ref: ${ref}`)
+	return resolved.trim()
+}
+
+function listManifestPaths(commit) {
+	return git(['ls-tree', '-r', '--name-only', commit])
+		.split('\n')
+		.filter((path) => path.endsWith('package.json') && !path.includes('node_modules/'))
+}
+
+function readManifest(commit, path) {
+	const content = git(['show', `${commit}:${path}`], { allowFailure: true })
+	if (content === null) return null
+	try {
+		return JSON.parse(content)
+	} catch {
+		fail(`${path} at ${commit.slice(0, 7)} is not valid JSON`)
+	}
+}
+
+function indexDeclarations(manifest) {
+	const declarations = new Map()
+	for (const section of SECTIONS) {
+		for (const [name, range] of Object.entries(manifest[section] || {})) {
+			if (typeof range !== 'string') continue
+			if (!declarations.has(name)) declarations.set(name, { range, sections: [] })
+			declarations.get(name).sections.push(section)
+		}
+	}
+	return declarations
+}
+
+function parseVersion(range) {
+	if (NON_VERSION_PROTOCOL_PATTERN.test(range)) return null
+	const match = VERSION_PATTERN.exec(range)
+	if (match === null) return null
+	return {
+		release: [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)],
+		prerelease: match[4]
+	}
+}
+
+function formatVersion(version) {
+	const [major, minor, patch] = version.release
+	return version.prerelease === undefined ? `${major}.${minor}.${patch}` : `${major}.${minor}.${patch}-${version.prerelease}`
+}
+
+// ponytail: prereleases compare as strings, so 1.0.0-alpha.10 sorts before alpha.9.
+// Correct enough to tell an upgrade from a downgrade; replace with a real semver
+// implementation only if the misclassification shows up in a report.
+function compareVersions(left, right) {
+	for (let index = 0; index < left.release.length; index += 1) {
+		if (left.release[index] !== right.release[index]) return left.release[index] - right.release[index]
+	}
+	if (left.prerelease === right.prerelease) return 0
+	if (left.prerelease === undefined) return 1
+	if (right.prerelease === undefined) return -1
+	return left.prerelease < right.prerelease ? -1 : 1
+}
+
+function compareRanges(left, right) {
+	const leftVersion = parseVersion(left)
+	const rightVersion = parseVersion(right)
+	if (leftVersion === null || rightVersion === null) return left === right ? 0 : left < right ? -1 : 1
+	return compareVersions(leftVersion, rightVersion)
+}
+
+function extremeRange(ranges, prefer) {
+	return ranges.reduce((widest, range) => {
+		const order = compareRanges(range, widest)
+		return prefer === 'lowest' ? (order < 0 ? range : widest) : order > 0 ? range : widest
+	})
+}
+
+function classify(fromRange, toRange) {
+	const from = parseVersion(fromRange)
+	const to = parseVersion(toRange)
+	if (from === null || to === null) return { kind: 'unclassified', fromVersion: null, toVersion: null }
+	const order = compareVersions(to, from)
+	return {
+		kind: order > 0 ? 'upgrade' : order < 0 ? 'downgrade' : 'range-only',
+		fromVersion: formatVersion(from),
+		toVersion: formatVersion(to)
+	}
+}
+
+function collectOccurrences(beforeManifests, afterManifests) {
+	const occurrences = new Map()
+	for (const [path, beforeManifest] of beforeManifests) {
+		const afterManifest = afterManifests.get(path)
+		if (afterManifest === undefined) continue
+		const afterDeclarations = indexDeclarations(afterManifest)
+		for (const [name, before] of indexDeclarations(beforeManifest)) {
+			const after = afterDeclarations.get(name)
+			if (after === undefined || after.range === before.range) continue
+			if (!occurrences.has(name)) occurrences.set(name, [])
+			occurrences.get(name).push({ path, sections: before.sections, from: before.range, to: after.range })
+		}
+	}
+	return occurrences
+}
+
+function buildChange(name, occurrences) {
+	const from = extremeRange(occurrences.map((occurrence) => occurrence.from), 'lowest')
+	const to = extremeRange(occurrences.map((occurrence) => occurrence.to), 'highest')
+	const { kind, fromVersion, toVersion } = classify(from, to)
+	return {
+		name,
+		kind,
+		from,
+		to,
+		fromVersion,
+		toVersion,
+		sections: [...new Set(occurrences.flatMap((occurrence) => occurrence.sections))].sort(),
+		manifests: [...new Set(occurrences.map((occurrence) => occurrence.path))].sort()
+	}
+}
+
+function loadManifests(commit) {
+	const manifests = new Map()
+	for (const path of listManifestPaths(commit)) {
+		const manifest = readManifest(commit, path)
+		if (manifest !== null) manifests.set(path, manifest)
+	}
+	return manifests
+}
+
+function main() {
+	const { from, to } = parseArguments(process.argv.slice(2))
+	const fromCommit = resolveCommit(from)
+	const toCommit = resolveCommit(to)
+	const beforeManifests = loadManifests(fromCommit)
+	const afterManifests = loadManifests(toCommit)
+	const changes = [...collectOccurrences(beforeManifests, afterManifests)]
+		.map(([name, occurrences]) => buildChange(name, occurrences))
+		.sort((left, right) => left.name.localeCompare(right.name))
+
+	process.stdout.write(
+		`${JSON.stringify(
+			{
+				from,
+				to,
+				fromCommit,
+				toCommit,
+				manifests: {
+					before: beforeManifests.size,
+					after: afterManifests.size,
+					compared: [...beforeManifests.keys()].filter((path) => afterManifests.has(path)).length
+				},
+				changes
+			},
+			null,
+			2
+		)}\n`
+	)
+}
+
+main()
