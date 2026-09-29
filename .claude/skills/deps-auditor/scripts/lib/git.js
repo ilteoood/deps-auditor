@@ -26,7 +26,7 @@ function listFiles(commit) {
 }
 
 function readFileAt(commit, path) {
-	return run(['show', `${commit}:${path}`], { allowFailure: true })
+	return run(['show', `${commit}:${path}`])
 }
 
 module.exports = { listFiles, readFileAt, resolveCommit }
