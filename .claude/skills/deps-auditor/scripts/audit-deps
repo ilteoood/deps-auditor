@@ -1,0 +1,40 @@
+#!/usr/bin/env node
+'use strict'
+
+const { collectChanges } = require('./lib/changes')
+const { parseArguments } = require('./lib/cli')
+const { resolveCommit } = require('./lib/git')
+const { loadManifests } = require('./lib/manifest')
+
+function main() {
+	const { from, to } = parseArguments(process.argv.slice(2))
+	const fromCommit = resolveCommit(from)
+	const toCommit = resolveCommit(to)
+	const before = loadManifests(fromCommit)
+	const after = loadManifests(toCommit)
+	process.stdout.write(
+		`${JSON.stringify(
+			{
+				from,
+				to,
+				fromCommit,
+				toCommit,
+				manifests: {
+					before: before.size,
+					after: after.size,
+					compared: [...before.keys()].filter((path) => after.has(path)).length
+				},
+				changes: collectChanges(before, after)
+			},
+			null,
+			2
+		)}\n`
+	)
+}
+
+try {
+	main()
+} catch (error) {
+	process.stderr.write(`audit-deps: ${error.message}\n`)
+	process.exit(1)
+}
