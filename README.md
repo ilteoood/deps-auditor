@@ -1,6 +1,6 @@
 # deps-auditor
 
-A Claude Code skill that audits what changed when dependencies are upgraded between two git refs.
+An agent skill that audits what changed when dependencies are upgraded between two git refs.
 
 Given a start and an end ref it diffs every `package.json` in the tree, resolves each changed
 package's upstream repository from the npm registry, reads its changelog, and reports what the
@@ -17,15 +17,15 @@ it off and the report is printed in the conversation.
 
 ## Install
 
-Copy the skill directory into wherever Claude Code looks for skills.
+With [skills.sh](https://skills.sh), which installs the skill into whichever agents you name:
 
 ```bash
-# for every project
-cp -r .claude/skills/deps-auditor ~/.claude/skills/
-
-# or for one project
-cp -r .claude/skills/deps-auditor /path/to/project/.claude/skills/
+npx skills add ilteoood/deps-auditor             # pick the agents interactively
+npx skills add ilteoood/deps-auditor --all       # every detected agent, no prompts
+npx skills add ilteoood/deps-auditor -g -a claude-code   # globally, for Claude Code only
 ```
+
+`npx skills remove deps-auditor` takes it back out.
 
 The skill needs `git`, `node` and `jq` on the path, and `gh` authenticated for private
 repositories.
@@ -44,14 +44,15 @@ A range that jumps several majors covers every release in between, not just the 
 
 Auditing `package.json` alone means a lockfile-only dependency move is invisible ([ADR
 0001](docs/adr/0001-manifest-diff-over-lockfile.md)). The skill's own
-[Limits](.claude/skills/deps-auditor/SKILL.md#limits) cover changelog coverage, monorepo-published
+[Limits](skills/deps-auditor/SKILL.md#limits) cover changelog coverage, monorepo-published
 packages and `peerDependencies`.
 
 ## Development
 
-The diff logic is dependency-free CommonJS split into one module per domain under
-`scripts/lib/`, with `scripts/audit-deps` as a thin entry point that wires them together and prints
-the JSON; the fetch and summarise steps are instructions the model follows.
+`skills/deps-auditor/` is what ships; `test/` and `docs/` stay in the repository. The diff logic is
+dependency-free CommonJS split into one module per domain under `skills/deps-auditor/scripts/lib/`,
+with `scripts/audit-deps` as a thin entry point that wires them together and prints the JSON; the
+fetch and summarise steps are instructions the model follows.
 
 | Module | Owns |
 | --- | --- |
@@ -64,13 +65,18 @@ the JSON; the fetch and summarise steps are instructions the model follows.
 Every module throws; the entry point is the only place that catches and reports.
 
 ```bash
-.claude/skills/deps-auditor/test/audit-deps.js   # builds a fixture repo and asserts on its output
-node --check .claude/skills/deps-auditor/scripts/lib/version.js
+test/audit-deps.js   # builds a fixture repo and asserts on its output
+node --check skills/deps-auditor/scripts/lib/version.js
 ```
 
 `scripts/audit-deps` also runs on its own and prints the same JSON the skill consumes, which is the
 fastest way to see what a given ref range looks like:
 
 ```bash
-.claude/skills/deps-auditor/scripts/audit-deps --from v1.0.0 --to v2.0.0
+skills/deps-auditor/scripts/audit-deps --from v1.0.0 --to v2.0.0
 ```
+
+## License
+
+[MIT](LICENSE)
+
