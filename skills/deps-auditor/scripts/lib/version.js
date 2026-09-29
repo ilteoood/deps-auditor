@@ -59,4 +59,4 @@ function classify(fromRange, toRange) {
 	}
 }
 
-module.exports = { classify, extremeRange }
+module.exports = { classify, compareVersions, extremeRange, parseVersion }

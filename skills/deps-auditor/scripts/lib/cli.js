@@ -9,4 +9,15 @@ function parseArguments(argv) {
 	return values
 }
 
-module.exports = { parseArguments }
+function parseChangelogOverrides(argv) {
+	const { values } = parseArgs({ args: argv, options: { file: { type: 'string', multiple: true } } })
+	const overrides = new Map()
+	for (const entry of values.file ?? []) {
+		const separator = entry.indexOf('=')
+		if (separator === -1) throw new Error(`--file expects <package>=<path>, got: ${entry}`)
+		overrides.set(entry.slice(0, separator), entry.slice(separator + 1))
+	}
+	return overrides
+}
+
+module.exports = { parseArguments, parseChangelogOverrides }

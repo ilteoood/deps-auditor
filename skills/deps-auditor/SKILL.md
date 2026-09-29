@@ -3,8 +3,8 @@ name: deps-auditor
 description: >-
   Audit the dependencies that changed between two git refs. Given a start and an end commit,
   tag, branch or SHA, it diffs every package.json in the tree, resolves each changed package's
-  upstream repo from the npm registry, reads whichever of its changelog file or published release
-  notes actually covers the range, and reports what each upgrade changed with a BREAKING /
+  upstream repository from the npm registry, reads its changelog file or published release notes
+  from GitHub, GitLab or Bitbucket, and reports what each upgrade changed with a BREAKING /
   ACTION REQUIRED flag per dependency. Use when reviewing a dependency bump, a Dependabot or
   Renovate merge, a monorepo upgrade or a release range, or when asked what changed between two
   versions of the dependencies.
@@ -40,73 +40,78 @@ the highest `to`.
 
 If `changes` is empty, stop and say that no dependency changed between the two refs.
 
-## 2. Resolve the upstream repository
+## 2. Fetch the upstream notes
+
+Pipe step 1 into the fetcher:
 
 ```bash
-npm view <package> repository.url --json
+<skill-dir>/scripts/audit-deps --from <ref> --to <ref> | <skill-dir>/scripts/fetch-changelog
 ```
 
-The registry is the only source. Normalise the result to `owner/repo` by stripping a leading
-`git+`, a `git@` prefix, any `://…/` authority, and a trailing `.git`. If the field is missing,
-unusable, or not a github.com URL, the package has no fetch path — send it straight to the
-"No changelog found" section.
+It resolves each package's repository from the npm registry — the only source — then reads the
+changelog file and the release notes, and prints one `results` entry per dependency holding the
+sources themselves plus evidence about them. Do not construct a URL or a `curl` command yourself.
+Each host addresses a repository differently, and GitLab's in particular needs a path
+percent-encoded: a file that exists at `docs/CHANGELOG.md` answers 404 unless the slash is `%2F`,
+which is indistinguishable from a repository that published no changelog at all.
 
-The URL is not proof that the repo's changelog covers this package. A package published from a
-monorepo — `@types/*` resolves to DefinitelyTyped, for instance — points at a repository whose
-changelog describes the repository, not the package. If the fetched changelog never mentions the
-package you asked about, treat it as having no changelog rather than summarising unrelated
-entries.
+The supported hosts are github.com, gitlab.com and bitbucket.org. A repository on any other host,
+or on a self-hosted or enterprise instance of one of these, is reported rather than fetched.
 
-## 3. Fetch the changelog
-
-Most packages publish no changelog file at all and keep their notes on GitHub releases, so treat
-the two sources as equals and read whichever covers the range.
-
-**Changelog file.** Try each candidate filename in this order, stopping at the first that exists:
-
-```
-CHANGELOG.md  changelog.md  CHANGELOG  HISTORY.md  History.md  CHANGES.md  NEWS.md  RELEASES.md
-```
-
-Also try `CHANGELOG-<major>.md` variants when a repository splits its history by major.
+Candidates are tried in order and the first hit wins: `CHANGELOG.md`, `changelog.md`, `CHANGELOG`,
+`HISTORY.md`, `History.md`, `CHANGES.md`, `NEWS.md`, `RELEASES.md`, then `CHANGELOG-<major>.md` for
+each major the range crosses. When the file is named something none of those cover — monit ships
+`CHANGES` with no extension — pass the path for that package and pipe again:
 
 ```bash
-gh api repos/<owner>/<repo>/contents/CHANGELOG.md -H 'Accept: application/vnd.github.raw'
+<skill-dir>/scripts/audit-deps --from <ref> --to <ref> | <skill-dir>/scripts/fetch-changelog --file 'monit=CHANGES'
 ```
 
-`gh api` is authenticated, so private repositories work; `raw.githubusercontent.com` does not.
-It exits 1 on a miss and 0 on a hit, so the candidate loop ends at the first command that exits 0.
-If the contents API refuses the file as too large, take `.download_url` from the same call and
-fetch that instead. A directory path returns a JSON listing rather than a file, so a path that
-turns out to be a folder is not a hit.
+Read `status` on each result:
 
-**Release notes.**
+| `status` | what it means |
+| --- | --- |
+| `fetched` | at least one source returned content; judge whether it covers the range |
+| `no-changelog` | the sources were read and none carries the range |
+| `no-fetch-path` | no usable `repository.url`, or an unsupported host; `reason` says which |
+| `fetch-failed` | a source could not be read; `changelog.status` and `releases.status` hold the code |
+| `unclassified` | the range carries no comparable version, so nothing was fetched |
 
-```bash
-gh api --paginate 'repos/<owner>/<repo>/releases?per_page=100' | jq -s 'add'
-```
+A `no-fetch-path` result carries `reason` — `no-repository`, `unusable-url` or `unsupported-host` —
+and the `repositoryUrl` the registry gave, which is the link to show for it. `releases` is `null`
+on Bitbucket, which publishes none.
 
-Always paginate. A single page of 100 reaches back only as far as the last hundred releases, so
-without it a dependency with a long history looks like it has no notes when its range is simply
-older than the page. `jq -s 'add'` merges the pages into one array; `gh`'s own `--slurp` cannot be
-combined with `--jq`.
+## 3. Judge what you fetched
 
-Tag names vary (`v1.2.3`, `1.2.3`, `pkg@1.2.3`); read the first version-looking token in each and
-keep the ones that fall inside `(fromVersion, toVersion]`. A shared prefix is not a bound — the
-`v5.` tags of a package currently on 5.9 include releases well above a 5.6 ceiling.
+The fetcher reports what it found; it does not decide what counts as coverage. That reading is
+yours, and it is the step the whole design is built to keep. Each result carries:
 
-**Judge what you fetched.** Neither source existing is proof that it covers the range, so confirm
-what you got carries substantive content for versions inside it. Common ways it does not: the file
-exists but holds only an "Unreleased Changes" section, as Express's `History.md` does; the release
-body is a link to a blog post rather than the notes themselves, as TypeScript's are; or the body is
-empty. Read the other source rather than summarising whatever is there.
+- `changelog.versionsFound` — the versions its markdown headings name
+- `changelog.packageMentioned` — whether the file ever names the package you asked about
+- `changelog.sliced` — whether `changelog.content` was cut down to the range
+- `releases.entries` — the releases inside the range, each with its `tag`, `version` and `body`
+- `releases.bodiesAreLinks` — whether a release body is a pointer to notes rather than the notes
 
-**If neither source covers the range**, the package goes in the "No changelog found" section with a
-compare link and no summary:
+Neither source existing is proof that it covers the range, so confirm what you got carries
+substantive content for versions inside it. Common ways it does not:
 
-```
-https://github.com/<owner>/<repo>/compare/<fromVersion>...<toVersion>
-```
+- `packageMentioned` is false. The URL pointed at a repository whose changelog describes the
+  repository, not the package — every `@types/*` package, which resolves to DefinitelyTyped, is
+  this case. Treat it as having no changelog rather than summarising unrelated entries.
+- `bodiesAreLinks` is true. The release body points at a blog post or a changelog file instead of
+  carrying the notes, as TypeScript's and GitLab Runner's do. The notes are somewhere else; find
+  them or say there are none.
+- `sliced` is false. No heading range could be isolated, so the whole file is present and the
+  versions in the range have to be found by reading it.
+- The file holds only an "Unreleased Changes" section, as Express's `History.md` does, or a release
+  body is empty.
+
+Release tags vary (`v1.2.3`, `1.2.3`, `pkg@1.2.3`) and the version in each is compared numerically,
+so a shared prefix is no longer a bound: the `v5.` tags of a package currently on 5.9 do not all
+fall inside a 5.6 ceiling.
+
+**If neither source covers the range**, the package goes in the "No changelog found" section with
+the compare link the result carries, and no summary.
 
 ## 4. Summarise each dependency
 
@@ -152,12 +157,17 @@ within each group.
 
 ## Unclassified changes
 
+## No fetch path
+
+- `<name>` `<from>` → `<to>` — [<host>](<repositoryUrl>) · <reason>
+
 ## No changelog found
 
-- `<name>` `<from>` → `<to>` — [compare](https://github.com/<owner>/<repo>/compare/<fromVersion>...<toVersion>)
+- `<name>` `<from>` → `<to>` — [compare](<links.compare>)
 ```
 
-Omit a section when it has no entries.
+Omit a section when it has no entries. A dependency whose fetch failed is not the same as one with
+no changelog: report the error against it rather than listing it as undocumented.
 
 With `--out PATH`, write that markdown to `PATH` and print only the header line and a table of
 name, range and flag to stdout. Without it, print the whole report and write nothing.
@@ -166,8 +176,15 @@ name, range and flag to stdout. Without it, print the whole report and write not
 
 - The audit is built from `package.json` alone. A dependency that moved in the lockfile without a
   manifest change is invisible to it.
-- Non-GitHub hosts have no release-notes fallback, and a package with no `repository.url` has no
-  fetch path at all.
+- Only github.com, gitlab.com and bitbucket.org are read. A package on Codeberg, Gitea, a
+  self-hosted GitLab or an enterprise instance of a supported forge has no fetch path.
+- Bitbucket publishes no release notes and has no compare view, so a Bitbucket dependency is read
+  from its changelog file alone and its "No changelog found" entry links the repository.
+- A changelog is read from the default branch, not from the tag matching the audited version, so a
+  repository that rewrites its changelog after a release makes the audit non-reproducible.
+- A host that answers 404 for a private repository to an anonymous caller cannot be told apart from
+  one that has no such repository, so a private package may be reported as undocumented. Set
+  `GITLAB_TOKEN` or `BITBUCKET_TOKEN` to read a private one.
 - Packages published from a monorepo, `@types/*` above all, have no changelog of their own and
   land in the "No changelog found" section.
 - `peerDependencies` are not audited.
