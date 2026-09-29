@@ -31,5 +31,7 @@ reported as having no fetch path rather than being fetched. The host is already 
 costs a request per dependency to solve a question only a minority of packages raise.
 
 Release notes are paginated by the script rather than by `gh api --paginate` and `jq`, so `jq` is
-no longer a prerequisite. Pagination stops once a page yields no release newer than the range's
-floor, and is capped so a repository with tens of thousands of releases cannot loop unboundedly.
+no longer a prerequisite. The walk reads pages until one comes back short, because a host that
+answers oldest first would otherwise let a range's floor end the walk before the releases above it
+were read. A repository with more releases than the walk's page bound is reported as truncated
+rather than silently cut short.

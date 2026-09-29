@@ -3,38 +3,22 @@
 const {
 	candidatePaths,
 	findHeadings,
-	isMostlyLinks,
+	linkShare,
 	sliceToRange,
 	versionsInHeadings,
 	within
 } = require('./changelog')
 const { PAGE_SIZE, readRepositoryUrl, resolveForge } = require('./forges')
-const { compareVersions, parseVersion } = require('./version')
+const { formatVersion, parseVersion } = require('./version')
 
-const MAX_RELEASE_PAGES = 20
-
-const RELEASE_VERSION = /(\d+)\.(\d+)(?:\.(\d+))?(-[0-9A-Za-z.-]+)?/
+const MAX_RELEASE_PAGES = 50
 
 function releaseOf(entry) {
 	const tag = entry?.tag_name
 	if (typeof tag !== 'string') return null
-	const match = RELEASE_VERSION.exec(tag)
-	// ponytail: a prerelease tag is dropped rather than reported as its final version.
-	// TypeScript tags a beta and an rc of every release, and reading `v5.4-beta` as 5.4.0
-	// puts a version in the range twice and claims a build the range never installs.
-	if (match === null || match[4] !== undefined) return null
-	return {
-		tag,
-		version: `${Number(match[1])}.${Number(match[2])}.${Number(match[3] || 0)}`,
-		body: typeof entry.description === 'string' ? entry.description : ''
-	}
-}
-
-function pastFloor(release, fromVersion) {
-	const from = parseVersion(fromVersion)
-	if (from === null) return false
-	const version = parseVersion(release.version)
-	return version !== null && compareVersions(version, from) <= 0
+	const version = parseVersion(tag)
+	if (version === null) return null
+	return { tag, version: formatVersion(version), body: typeof entry.description === 'string' ? entry.description : '' }
 }
 
 async function readChangelog(transport, forge, coordinates, fromVersion, toVersion, override) {
@@ -52,9 +36,7 @@ async function readReleases(transport, forge, coordinates, fromVersion, toVersio
 	const inRange = []
 	let status = 404
 	let error
-	// ponytail: hosts are assumed to return releases newest first, which is what lets the
-	// floor stop the walk. If one returned them oldest first the walk would still end at
-	// MAX_RELEASE_PAGES, and the cap would need to be a real bound rather than a backstop.
+	let exhausted = false
 	for (let page = 1; page <= MAX_RELEASE_PAGES; page += 1) {
 		const response = await forge.listReleases(transport, coordinates, page)
 		status = response.status
@@ -67,12 +49,19 @@ async function readReleases(transport, forge, coordinates, fromVersion, toVersio
 			error = 'releases did not parse as JSON'
 			break
 		}
-		if (!Array.isArray(batch) || batch.length === 0) break
+		if (!Array.isArray(batch)) break
 		const releases = batch.map(releaseOf).filter((release) => release !== null)
-		inRange.push(...releases.filter((release) => within(release.version, fromVersion, toVersion)))
-		if (batch.length < PAGE_SIZE || releases.some((release) => pastFloor(release, fromVersion))) break
+		inRange.push(
+			...releases
+				.filter((release) => within(release.version, fromVersion, toVersion))
+				.map((release) => ({ ...release, linkShare: linkShare(release.body) }))
+		)
+		if (batch.length < PAGE_SIZE) {
+			exhausted = true
+			break
+		}
 	}
-	return { status, error, entries: inRange }
+	return { status, error, entries: inRange, truncated: status === 200 && !exhausted }
 }
 
 function describeChangelog(found, name, fromVersion, toVersion) {
@@ -124,9 +113,8 @@ async function collectNotes(change, options) {
 	const found = await readChangelog(options.transport, forge, coordinates, fromVersion, toVersion, options.overrides.get(name))
 	const releases = await readReleases(options.transport, forge, coordinates, fromVersion, toVersion)
 	const changelog = describeChangelog(found, name, fromVersion, toVersion)
-	const reported = releases === null ? null : { ...releases, bodiesAreLinks: releases.entries.some((entry) => isMostlyLinks(entry.body)) }
 
-	return { ...identified, status: outcome(changelog, releases), changelog, releases: reported }
+	return { ...identified, status: outcome(changelog, releases), changelog, releases }
 }
 
 module.exports = { collectNotes }

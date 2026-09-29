@@ -20,9 +20,9 @@ const FORGES = {
 		name: 'github',
 		accepts: (segments) => segments.length === 2,
 		readFile: (transport, coordinates, path) =>
-			transport.github(['api', `repos/${coordinates}/contents/${path}`, '-H', 'Accept: application/vnd.github.raw']),
+			transport.github([`repos/${coordinates}/contents/${path}`, '-H', 'Accept: application/vnd.github.raw']),
 		listReleases: (transport, coordinates, page) =>
-			transport.github(['api', `repos/${coordinates}/releases?per_page=${PAGE_SIZE}&page=${page}`]),
+			transport.github([`repos/${coordinates}/releases?per_page=${PAGE_SIZE}&page=${page}`]),
 		compareUrl: (coordinates, from, to) => `https://github.com/${coordinates}/compare/${from}...${to}`
 	},
 	'gitlab.com': {

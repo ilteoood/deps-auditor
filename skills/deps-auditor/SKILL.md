@@ -90,7 +90,8 @@ yours, and it is the step the whole design is built to keep. Each result carries
 - `changelog.packageMentioned` — whether the file ever names the package you asked about
 - `changelog.sliced` — whether `changelog.content` was cut down to the range
 - `releases.entries` — the releases inside the range, each with its `tag`, `version` and `body`
-- `releases.bodiesAreLinks` — whether a release body is a pointer to notes rather than the notes
+- `releases.entries[].linkShare` — how much of that body is link, from 0 to 1
+- `releases.truncated` — whether the host had more releases than the walk read
 
 Neither source existing is proof that it covers the range, so confirm what you got carries
 substantive content for versions inside it. Common ways it does not:
@@ -98,9 +99,11 @@ substantive content for versions inside it. Common ways it does not:
 - `packageMentioned` is false. The URL pointed at a repository whose changelog describes the
   repository, not the package — every `@types/*` package, which resolves to DefinitelyTyped, is
   this case. Treat it as having no changelog rather than summarising unrelated entries.
-- `bodiesAreLinks` is true. The release body points at a blog post or a changelog file instead of
+- `linkShare` is high. The release body points at a blog post or a changelog file instead of
   carrying the notes, as TypeScript's and GitLab Runner's do. The notes are somewhere else; find
   them or say there are none.
+- `truncated` is true. Releases past the walk's bound were never read, so the range may have more
+  coverage behind them than the entries show. Say so rather than reporting the walk as complete.
 - `sliced` is false. No heading range could be isolated, so the whole file is present and the
   versions in the range have to be found by reading it.
 - The file holds only an "Unreleased Changes" section, as Express's `History.md` does, or a release
@@ -108,7 +111,8 @@ substantive content for versions inside it. Common ways it does not:
 
 Release tags vary (`v1.2.3`, `1.2.3`, `pkg@1.2.3`) and the version in each is compared numerically,
 so a shared prefix is no longer a bound: the `v5.` tags of a package currently on 5.9 do not all
-fall inside a 5.6 ceiling.
+fall inside a 5.6 ceiling. A prerelease tag stays a prerelease when the range calls for one, and is
+otherwise left out: `v5.4-beta` is a build that `~5.4.2` never installs, not a 5.4.0 release.
 
 **If neither source covers the range**, the package goes in the "No changelog found" section with
 the compare link the result carries, and no summary.

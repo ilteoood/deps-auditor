@@ -3,9 +3,12 @@
 
 const assert = require('node:assert/strict')
 const { spawnSync } = require('node:child_process')
+const { mkdtempSync, rmSync, writeFileSync } = require('node:fs')
+const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 
 const { collectNotes } = require('../skills/deps-auditor/scripts/lib/notes')
+const { github: callGithub } = require('../skills/deps-auditor/scripts/lib/transport')
 
 const SCRIPT = join(__dirname, '..', 'skills', 'deps-auditor', 'scripts', 'fetch-changelog')
 
@@ -39,6 +42,10 @@ function releases(...versions) {
 	}
 }
 
+function pageOf(...versions) {
+	return releases(...Array.from({ length: 100 }, (_, index) => versions[Math.min(index, versions.length - 1)]))
+}
+
 function createTransport(responses) {
 	const calls = []
 	return {
@@ -48,8 +55,8 @@ function createTransport(responses) {
 			return responses[url] ?? { status: 404, body: '' }
 		},
 		github: async (args) => {
-			calls.push(args[1])
-			return responses[args[1]] ?? { status: 404, body: '' }
+			calls.push(args[0])
+			return responses[args[0]] ?? { status: 404, body: '' }
 		}
 	}
 }
@@ -102,7 +109,8 @@ async function github() {
 		['1.1.0', '1.0.5'],
 		'the floor is exclusive and the ceiling inclusive'
 	)
-	assert.equal(result.releases.bodiesAreLinks, false)
+	assert.equal(result.releases.entries[0].linkShare, 0)
+	assert.equal(result.releases.truncated, false, 'a short page is the end of the list')
 	assert.ok(!transport.calls.includes('repos/acme/widget/contents/changelog.md'), 'the first hit ends the candidate loop')
 }
 
@@ -129,7 +137,7 @@ async function gitlab() {
 	assert.equal(result.forge, 'gitlab')
 	assert.equal(result.coordinates, 'gitlab-org/gitlab-runner')
 	assert.equal(result.links.compare, 'https://gitlab.com/gitlab-org/gitlab-runner/-/compare/1.0.0...1.1.0')
-	assert.equal(result.releases.bodiesAreLinks, true, 'a body that is a link is not the notes')
+	assert.ok(result.releases.entries[0].linkShare > 0.5, 'a body that is mostly link is a pointer, and the share says how much')
 	assert.ok(
 		transport.calls.every((url) => url.startsWith(project)),
 		'the project path is percent-encoded, so a subgroup path stays addressable'
@@ -233,6 +241,67 @@ async function outcomes() {
 	assert.equal(unclassified.result.status, 'unclassified')
 }
 
+async function prereleaseOrdering() {
+	const { result } = await collect({
+		fromVersion: '1.1.0-alpha.9',
+		toVersion: '1.1.0-rc.1',
+		responses: {
+			'repos/acme/widget/releases?per_page=100&page=1': releases(
+				'1.1.0-alpha.9',
+				'1.1.0-alpha.10',
+				'1.1.0-rc.1',
+				'1.1.0'
+			)
+		}
+	})
+	assert.deepEqual(
+		result.releases.entries.map((entry) => entry.version),
+		['1.1.0-alpha.10', '1.1.0-rc.1'],
+		'alpha.10 outranks alpha.9, and a prerelease is in range only when the range asks for one'
+	)
+}
+
+async function pagination() {
+	const oldestFirst = await collect({
+		responses: {
+			'repos/acme/widget/releases?per_page=100&page=1': pageOf('0.9.0'),
+			'repos/acme/widget/releases?per_page=100&page=2': pageOf('1.1.0', '0.9.0'),
+			'repos/acme/widget/releases?per_page=100&page=3': releases('0.8.0')
+		}
+	})
+	assert.deepEqual(
+		oldestFirst.result.releases.entries.map((entry) => entry.version),
+		['1.1.0'],
+		'a host answering oldest first still yields the release, because no page is assumed to end the walk'
+	)
+	assert.equal(oldestFirst.result.releases.truncated, false)
+
+	const endless = await collect({
+		responses: new Proxy({}, {
+			get: (_, page) => pageOf('0.9.0')
+		})
+	})
+	assert.equal(endless.result.releases.truncated, true, 'hitting the page cap is reported, not hidden')
+}
+
+function ghExitCodeHidesStatus() {
+	const stubDirectory = mkdtempSync(join(tmpdir(), 'deps-auditor-gh-'))
+	const stub = join(stubDirectory, 'gh')
+	writeFileSync(stub, '#!/bin/sh\nprintf "HTTP/2.0 500 Internal Server Error\\r\\n\\r\\n{\\"status\\":500}"\nexit 1\n', {
+		mode: 0o755
+	})
+	const original = process.env.PATH
+	process.env.PATH = `${stubDirectory}:${original}`
+	try {
+		const response = callGithub(['repos/acme/widget/contents/CHANGELOG.md'])
+		assert.equal(response.status, 500, 'gh exits 1 for every failure, so the status must come from the response')
+		assert.deepEqual(JSON.parse(response.body), { status: 500 }, 'the body is the payload, not the headers')
+	} finally {
+		process.env.PATH = original
+		rmSync(stubDirectory, { recursive: true, force: true })
+	}
+}
+
 function cli() {
 	const piped = spawnSync(SCRIPT, [], { input: JSON.stringify({ changes: [change({ fromVersion: null, toVersion: null })] }), encoding: 'utf8' })
 	assert.equal(piped.status, 0, piped.stderr)
@@ -254,6 +323,9 @@ async function main() {
 	await bitbucket()
 	await noFetchPath()
 	await outcomes()
+	await prereleaseOrdering()
+	await pagination()
+	ghExitCodeHidesStatus()
 	cli()
 	console.log('fetch-changelog: all assertions passed')
 }

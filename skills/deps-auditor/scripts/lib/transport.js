@@ -1,10 +1,12 @@
 'use strict'
 
-const { execFileSync } = require('node:child_process')
+const { spawnSync } = require('node:child_process')
 const { request } = require('node:https')
 
 const OUTPUT_LIMIT = 16 * 1024 * 1024
 const TIMEOUT_MS = 15_000
+const STATUS_LINE = /^HTTP\/\S+\s+(\d{3})/
+const HEADERS_END = /\r?\n\r?\n/
 
 function https(url, headers) {
 	return new Promise((resolve) => {
@@ -21,17 +23,19 @@ function https(url, headers) {
 	})
 }
 
+function parseResponse(output) {
+	const separator = HEADERS_END.exec(output)
+	if (separator === null) return { status: 0, body: '', error: 'gh printed no response headers' }
+	const status = Number(STATUS_LINE.exec(output.slice(0, separator.index))?.[1] ?? 0)
+	return { status, body: output.slice(separator.index + separator[0].length) }
+}
+
 function github(args) {
-	try {
-		const quiet = { encoding: 'utf8', maxBuffer: OUTPUT_LIMIT, stdio: ['pipe', 'pipe', 'pipe'] }
-		return { status: 200, body: execFileSync('gh', args, quiet) }
-	} catch (error) {
-		if (error.code === 'ENOENT') return { status: 0, body: '', error: 'gh is not on the path' }
-		// ponytail: gh reports every failure as exit 1, so a 500 is reported as 404.
-		// Distinguishing them needs `gh api -i` and header parsing; add it if a report
-		// is ever wrong about a GitHub source existing.
-		return { status: error.status === 1 ? 404 : 0, body: '', error: String(error.stderr || error.message).trim() }
+	const result = spawnSync('gh', ['api', '--include', ...args], { encoding: 'utf8', maxBuffer: OUTPUT_LIMIT })
+	if (result.error !== undefined) {
+		return { status: 0, body: '', error: result.error.code === 'ENOENT' ? 'gh is not on the path' : result.error.message }
 	}
+	return parseResponse(result.stdout ?? '')
 }
 
 module.exports = { github, https }

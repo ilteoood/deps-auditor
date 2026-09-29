@@ -13,10 +13,10 @@ const CANDIDATES = [
 	'RELEASES.md'
 ]
 const HEADING_LINE = /^#{1,6}\s+.*$/gm
-const HEADING_VERSION = /(\d+)\.(\d+)(?:\.(\d+))?/
+const RELEASE_HEADING_VERSION = /(?<![\d.])v?(\d+)\.(\d+)(?:\.(\d+))?(?![\d.a-zA-Z])/
 const MARKDOWN_LINK = /\[[^\]]*\]\([^)]*\)/g
 const BARE_URL = /https?:\/\/\S+/g
-const LINK_SHARE_THRESHOLD = 0.5
+const WHITESPACE = /\s+/g
 
 function candidatePaths(fromVersion, toVersion) {
 	const from = parseVersion(fromVersion)
@@ -28,9 +28,7 @@ function candidatePaths(fromVersion, toVersion) {
 }
 
 function parseHeadingVersion(heading) {
-	// ponytail: a heading must carry major.minor, so `## 2024 roadmap` is not read as a
-	// release. A changelog naming only majors yields no evidence rather than wrong evidence.
-	const match = HEADING_VERSION.exec(heading.replace(/^#+\s*/, ''))
+	const match = RELEASE_HEADING_VERSION.exec(heading.replace(/^#+\s*/, ''))
 	if (match === null) return null
 	return `${Number(match[1])}.${Number(match[2])}.${Number(match[3] || 0)}`
 }
@@ -49,9 +47,10 @@ function versionsInHeadings(headings) {
 function within(version, fromVersion, toVersion) {
 	const from = parseVersion(fromVersion)
 	const to = parseVersion(toVersion)
-	if (from === null || to === null) return false
 	const candidate = parseVersion(version)
-	return candidate !== null && compareVersions(candidate, from) > 0 && compareVersions(candidate, to) <= 0
+	if (from === null || to === null || candidate === null) return false
+	const inRange = compareVersions(candidate, from) > 0 && compareVersions(candidate, to) <= 0
+	return inRange && (candidate.prerelease === undefined || to.prerelease !== undefined)
 }
 
 function sliceToRange(content, headings, fromVersion, toVersion) {
@@ -66,15 +65,10 @@ function sliceToRange(content, headings, fromVersion, toVersion) {
 	return content.slice(dated[first].index, dated[last].index)
 }
 
-function isMostlyLinks(body) {
-	// ponytail: a body over half link is treated as a pointer to notes rather than the
-	// notes. The threshold is a guess; a release whose first paragraph is a link to its
-	// own changelog is the case worth catching, and a body that is genuinely half link
-	// is rare enough that the model can overrule it.
-	const withoutLinks = body.replace(MARKDOWN_LINK, '').replace(BARE_URL, '')
-	const total = body.replace(/\s+/g, '').length
-	if (total === 0) return false
-	return (total - withoutLinks.replace(/\s+/g, '').length) / total > LINK_SHARE_THRESHOLD
+function linkShare(body) {
+	const prose = body.replace(MARKDOWN_LINK, '').replace(BARE_URL, '').replace(WHITESPACE, '')
+	const total = body.replace(WHITESPACE, '').length
+	return total === 0 ? 0 : (total - prose.length) / total
 }
 
-module.exports = { candidatePaths, findHeadings, isMostlyLinks, sliceToRange, versionsInHeadings, within }
+module.exports = { candidatePaths, findHeadings, linkShare, sliceToRange, versionsInHeadings, within }
