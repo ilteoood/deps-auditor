@@ -52,12 +52,23 @@ A range that jumps several majors covers every release in between, not just the 
 
 ## Development
 
-The diff logic is a dependency-free Node script; the fetch and summarise steps are instructions the
-model follows.
+The diff logic is dependency-free CommonJS split into one module per domain under
+`scripts/lib/`, with `scripts/audit-deps` as a thin entry point that wires them together and prints
+the JSON; the fetch and summarise steps are instructions the model follows.
+
+| Module | Owns |
+| --- | --- |
+| `lib/cli.js` | argument parsing and its failures |
+| `lib/git.js` | running git, resolving refs, reading a file at a ref |
+| `lib/manifest.js` | `package.json` shape and which sections count |
+| `lib/version.js` | version parsing, comparison, and upgrade vs downgrade |
+| `lib/changes.js` | cross-manifest aggregation and dedupe |
+
+Every module throws; the entry point is the only place that catches and reports.
 
 ```bash
 .claude/skills/deps-auditor/test/audit-deps.js   # builds a fixture repo and asserts on its output
-node --check .claude/skills/deps-auditor/scripts/audit-deps
+node --check .claude/skills/deps-auditor/scripts/lib/version.js
 ```
 
 `scripts/audit-deps` also runs on its own and prints the same JSON the skill consumes, which is the
