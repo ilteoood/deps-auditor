@@ -65,7 +65,7 @@ try {
 	assert.equal(result.status, 0, result.stderr)
 	const report = JSON.parse(result.stdout)
 
-	assert.deepEqual(report.manifests, { before: 2, after: 3, compared: 2 })
+	assert.deepEqual(report.manifests, { compared: 2 })
 	assert.deepEqual(
 		report.changes.map((change) => change.name),
 		['clsx', 'internal', 'react', 'typescript']

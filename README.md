@@ -42,13 +42,10 @@ A range that jumps several majors covers every release in between, not just the 
 
 ## Limits
 
-- Built from `package.json` alone, so a lockfile-only dependency move is invisible. See
-  [ADR 0001](docs/adr/0001-manifest-diff-over-lockfile.md).
-- Packages published from a monorepo — `@types/*` above all — have no changelog of their own and
-  land in "No changelog found".
-- No release-notes fallback for non-GitHub hosts, and no fetch path for a package with no
-  `repository.url`.
-- `peerDependencies` are not audited.
+Auditing `package.json` alone means a lockfile-only dependency move is invisible ([ADR
+0001](docs/adr/0001-manifest-diff-over-lockfile.md)). The skill's own
+[Limits](.claude/skills/deps-auditor/SKILL.md#limits) cover changelog coverage, monorepo-published
+packages and `peerDependencies`.
 
 ## Development
 
@@ -77,5 +74,3 @@ fastest way to see what a given ref range looks like:
 ```bash
 .claude/skills/deps-auditor/scripts/audit-deps --from v1.0.0 --to v2.0.0
 ```
-
-Vocabulary is defined in [CONTEXT.md](CONTEXT.md).

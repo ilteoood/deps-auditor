@@ -20,8 +20,6 @@ function main() {
 				fromCommit,
 				toCommit,
 				manifests: {
-					before: before.size,
-					after: after.size,
 					compared: [...before.keys()].filter((path) => after.has(path)).length
 				},
 				changes: collectChanges(before, after)
