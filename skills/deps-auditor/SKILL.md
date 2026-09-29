@@ -171,7 +171,8 @@ within each group.
 ```
 
 Omit a section when it has no entries. A dependency whose fetch failed is not the same as one with
-no changelog: report the error against it rather than listing it as undocumented.
+no changelog: report the error against it rather than listing it as undocumented. A null
+`links.compare` means no tag carries that version, so link `repositoryUrl` instead.
 
 With `--out PATH`, write that markdown to `PATH` and print only the header line and a table of
 name, range and flag to stdout. Without it, print the whole report and write nothing.
@@ -184,6 +185,9 @@ name, range and flag to stdout. Without it, print the whole report and write not
   self-hosted GitLab or an enterprise instance of a supported forge has no fetch path.
 - Bitbucket publishes no release notes and has no compare view, so a Bitbucket dependency is read
   from its changelog file alone and its "No changelog found" entry links the repository.
+- A compare link is built from the repository's own tag names, and is `null` when a version was
+  never published as a tag — TypeScript has no `v5.0.0`, so an audit from `~5.0.0` carries none.
+  Link `repositoryUrl` in place of a null one rather than writing `[compare](null)`.
 - A changelog is read from the default branch, not from the tag matching the audited version, so a
   repository that rewrites its changelog after a release makes the audit non-reproducible.
 - A host that answers 404 for a private repository to an anonymous caller cannot be told apart from

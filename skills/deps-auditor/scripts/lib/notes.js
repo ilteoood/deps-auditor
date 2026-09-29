@@ -64,6 +64,13 @@ async function readReleases(transport, forge, coordinates, fromVersion, toVersio
 	return { status, error, entries: inRange, truncated: status === 200 && !exhausted }
 }
 
+function compareLink(forge, coordinates, tags, fromVersion, toVersion) {
+	if (forge.compareView === false) return forge.compareUrl(coordinates)
+	const fromTag = tags.get(fromVersion)
+	const toTag = tags.get(toVersion)
+	return fromTag === undefined || toTag === undefined ? null : forge.compareUrl(coordinates, fromTag, toTag)
+}
+
 function describeChangelog(found, name, fromVersion, toVersion) {
 	if (found.content === undefined) return { path: found.path, status: found.status, error: found.error }
 	const headings = findHeadings(found.content)
@@ -101,13 +108,14 @@ async function collectNotes(change, options) {
 	if (resolved.forge === null) {
 		return { ...identity, status: 'no-fetch-path', reason: resolved.reason, host: resolved.host, repositoryUrl }
 	}
-	const { forge, coordinates } = resolved
+	const { forge, coordinates, cloneUrl } = resolved
+	const tags = options.readTags(forge, cloneUrl, name)
 	const identified = {
 		...identity,
 		forge: forge.name,
 		coordinates,
 		repositoryUrl,
-		links: { compare: forge.compareUrl(coordinates, fromVersion, toVersion) }
+		links: { compare: compareLink(forge, coordinates, tags, fromVersion, toVersion) }
 	}
 
 	const found = await readChangelog(options.transport, forge, coordinates, fromVersion, toVersion, options.overrides.get(name))

@@ -5,9 +5,10 @@ const assert = require('node:assert/strict')
 const { spawnSync } = require('node:child_process')
 const { mkdtempSync, rmSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
-const { join } = require('node:path')
+const { dirname, join } = require('node:path')
 
 const { collectNotes } = require('../skills/deps-auditor/scripts/lib/notes')
+const { readTags, resolveForge } = require('../skills/deps-auditor/scripts/lib/forges')
 const { github: callGithub } = require('../skills/deps-auditor/scripts/lib/transport')
 
 const SCRIPT = join(__dirname, '..', 'skills', 'deps-auditor', 'scripts', 'fetch-changelog')
@@ -75,11 +76,18 @@ function change(overrides) {
 	}
 }
 
-async function collect({ responses = {}, repositoryUrl = 'git+https://github.com/acme/widget.git', overrides = new Map(), ...fields } = {}) {
+async function collect({
+	responses = {},
+	repositoryUrl = 'git+https://github.com/acme/widget.git',
+	overrides = new Map(),
+	readTags = () => new Map([['1.0.0', 'v1.0.0'], ['1.1.0', 'v1.1.0']]),
+	...fields
+} = {}) {
 	const transport = createTransport(responses)
 	const result = await collectNotes(change(fields), {
 		overrides,
 		transport,
+		readTags,
 		readRepositoryUrl: () => repositoryUrl
 	})
 	return { result, transport }
@@ -96,7 +104,7 @@ async function github() {
 	assert.equal(result.status, 'fetched')
 	assert.equal(result.forge, 'github')
 	assert.equal(result.coordinates, 'acme/widget')
-	assert.equal(result.links.compare, 'https://github.com/acme/widget/compare/1.0.0...1.1.0')
+	assert.equal(result.links.compare, 'https://github.com/acme/widget/compare/v1.0.0...v1.1.0', 'the link names the tags, not the versions')
 	assert.equal(result.changelog.path, 'CHANGELOG.md')
 	assert.equal(result.changelog.sliced, true)
 	assert.equal(result.changelog.packageMentioned, true)
@@ -136,7 +144,7 @@ async function gitlab() {
 	assert.equal(result.status, 'fetched')
 	assert.equal(result.forge, 'gitlab')
 	assert.equal(result.coordinates, 'gitlab-org/gitlab-runner')
-	assert.equal(result.links.compare, 'https://gitlab.com/gitlab-org/gitlab-runner/-/compare/1.0.0...1.1.0')
+	assert.equal(result.links.compare, 'https://gitlab.com/gitlab-org/gitlab-runner/-/compare/v1.0.0...v1.1.0')
 	assert.ok(result.releases.entries[0].linkShare > 0.5, 'a body that is mostly link is a pointer, and the share says how much')
 	assert.ok(
 		transport.calls.every((url) => url.startsWith(project)),
@@ -284,6 +292,46 @@ async function pagination() {
 	assert.equal(endless.result.releases.truncated, true, 'hitting the page cap is reported, not hidden')
 }
 
+async function compareTags() {
+	const scoped = await collect({
+		repositoryUrl: 'https://github.com/acme/group.git',
+		readTags: () => new Map([['1.0.0', '@acme/widget@1.0.0'], ['1.1.0', '@acme/widget@1.1.0']])
+	})
+	assert.equal(
+		scoped.result.links.compare,
+		'https://github.com/acme/group/compare/@acme/widget@1.0.0...@acme/widget@1.1.0',
+		'a monorepo tags per package, and a bare version is not a ref'
+	)
+
+	const untagged = await collect({ readTags: () => new Map([['1.1.0', 'v1.1.0']]) })
+	assert.equal(untagged.result.links.compare, null, 'a version with no tag has no compare view, and a link to one would 404')
+
+	const unreachable = await collect({ readTags: () => new Map() })
+	assert.equal(unreachable.result.links.compare, null, 'an unreadable tag listing yields no link rather than a broken one')
+}
+
+function tagsPreferThePackage() {
+	const listing = [
+		'0000000000000000000000000000000000000000\trefs/tags/v1.0.0',
+		'1111111111111111111111111111111111111111\trefs/tags/@acme/widget@2.0.0',
+		'2222222222222222222222222222222222222222\trefs/tags/@acme/widget-extra@2.0.0',
+		'3333333333333333333333333333333333333333\trefs/tags/@acme/widget@2.0.0^{}'
+	].join('\n')
+	const git = join(mkdtempSync(join(tmpdir(), 'deps-auditor-git-')), 'git')
+	writeFileSync(git, `#!/bin/sh\nprintf '%s' '${listing}'\nexit 0\n`, { mode: 0o755 })
+	const original = process.env.PATH
+	process.env.PATH = `${dirname(git)}:${original}`
+	try {
+		const { forge, cloneUrl } = resolveForge('https://github.com/acme/widget.git')
+		const tags = readTags(forge, cloneUrl, '@acme/widget')
+		assert.equal(tags.get('2.0.0'), '@acme/widget@2.0.0', 'a package that shares a prefix with a sibling keeps its own tag')
+		assert.equal(tags.get('1.0.0'), 'v1.0.0', 'an unrelated tag still resolves when the package has none')
+	} finally {
+		process.env.PATH = original
+		rmSync(dirname(git), { recursive: true, force: true })
+	}
+}
+
 function ghExitCodeHidesStatus() {
 	const stubDirectory = mkdtempSync(join(tmpdir(), 'deps-auditor-gh-'))
 	const stub = join(stubDirectory, 'gh')
@@ -325,6 +373,8 @@ async function main() {
 	await outcomes()
 	await prereleaseOrdering()
 	await pagination()
+	await compareTags()
+	tagsPreferThePackage()
 	ghExitCodeHidesStatus()
 	cli()
 	console.log('fetch-changelog: all assertions passed')
