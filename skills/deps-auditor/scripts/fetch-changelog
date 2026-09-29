@@ -3,7 +3,7 @@
 
 const { readFileSync } = require('node:fs')
 const { parseChangelogOverrides } = require('./lib/cli')
-const { readRepositoryUrl } = require('./lib/forges')
+const { readRepositoryUrl, readTags } = require('./lib/forges')
 const { collectNotes } = require('./lib/notes')
 const { github, https } = require('./lib/transport')
 
@@ -12,7 +12,7 @@ async function main() {
 	const input = readFileSync(0, 'utf8').trim()
 	if (input === '') throw new Error('expected the audit JSON on stdin (pipe audit-deps output)')
 
-	const options = { overrides, transport: { github, https }, readRepositoryUrl }
+	const options = { overrides, transport: { github, https }, readRepositoryUrl, readTags }
 	const { changes } = JSON.parse(input)
 	const results = []
 	for (const change of changes ?? []) results.push(await collectNotes(change, options))
