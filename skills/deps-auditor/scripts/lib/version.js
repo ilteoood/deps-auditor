@@ -2,6 +2,7 @@
 
 const VERSION_PATTERN = /(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?/
 const NON_VERSION_PROTOCOL_PATTERN = /^(git\+|file:|link:|git:|https?:)/
+const NUMERIC_IDENTIFIER = /^\d+$/
 
 function parseVersion(range) {
 	if (NON_VERSION_PROTOCOL_PATTERN.test(range)) return null
@@ -20,9 +21,22 @@ function formatVersion(version) {
 		: `${major}.${minor}.${patch}-${version.prerelease}`
 }
 
-// ponytail: prereleases compare as strings, so 1.0.0-alpha.10 sorts before alpha.9.
-// Correct enough to tell an upgrade from a downgrade; replace with a real semver
-// implementation only if the misclassification shows up in a report.
+function comparePrerelease(left, right) {
+	const leftIdentifiers = left.split('.')
+	const rightIdentifiers = right.split('.')
+	for (const [index, leftIdentifier] of leftIdentifiers.entries()) {
+		const rightIdentifier = rightIdentifiers[index]
+		if (rightIdentifier === undefined) return 1
+		if (leftIdentifier === rightIdentifier) continue
+		const leftIsNumeric = NUMERIC_IDENTIFIER.test(leftIdentifier)
+		const rightIsNumeric = NUMERIC_IDENTIFIER.test(rightIdentifier)
+		if (leftIsNumeric !== rightIsNumeric) return leftIsNumeric ? -1 : 1
+		if (leftIsNumeric) return Number(leftIdentifier) - Number(rightIdentifier)
+		return leftIdentifier < rightIdentifier ? -1 : 1
+	}
+	return rightIdentifiers.length > leftIdentifiers.length ? -1 : 0
+}
+
 function compareVersions(left, right) {
 	for (let index = 0; index < left.release.length; index += 1) {
 		if (left.release[index] !== right.release[index]) return left.release[index] - right.release[index]
@@ -30,7 +44,7 @@ function compareVersions(left, right) {
 	if (left.prerelease === right.prerelease) return 0
 	if (left.prerelease === undefined) return 1
 	if (right.prerelease === undefined) return -1
-	return left.prerelease < right.prerelease ? -1 : 1
+	return comparePrerelease(left.prerelease, right.prerelease)
 }
 
 function compareRanges(left, right) {
@@ -59,4 +73,4 @@ function classify(fromRange, toRange) {
 	}
 }
 
-module.exports = { classify, extremeRange }
+module.exports = { classify, compareVersions, extremeRange, formatVersion, parseVersion }
