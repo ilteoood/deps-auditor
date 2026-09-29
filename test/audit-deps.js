@@ -7,7 +7,7 @@ const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
 const { dirname, join } = require('node:path')
 
-const SCRIPT = join(dirname(__dirname), 'scripts', 'audit-deps')
+const SCRIPT = join(__dirname, '..', 'skills', 'deps-auditor', 'scripts', 'audit-deps')
 
 function git(repository, args) {
 	return execFileSync('git', args, { cwd: repository, encoding: 'utf8' })
