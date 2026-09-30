@@ -15,12 +15,16 @@ const MAX_RELEASE_PAGES = 50
 const MAX_COMMIT_PAGES = 20
 const BREAKING_CHANGE = /^BREAKING[ -]CHANGE:[ \t]*(.*)$/m
 
+// GitHub names the release notes `body` and has no `description` at all; GitLab names them
+// `description` and has no `body`. Reading only one of the two silently emptied every release
+// from the other forge.
 function releaseOf(entry) {
 	const tag = entry?.tag_name
 	if (typeof tag !== 'string') return null
 	const version = parseVersion(tag)
 	if (version === null) return null
-	return { tag, version: formatVersion(version), body: typeof entry.description === 'string' ? entry.description : '' }
+	const body = entry.body ?? entry.description
+	return { tag, version: formatVersion(version), body: typeof body === 'string' ? body : '' }
 }
 
 // GitHub nests the message under `commit`, GitLab flattens it. A tag-only repository publishes
