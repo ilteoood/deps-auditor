@@ -3,9 +3,9 @@
 An agent skill that audits what changed when dependencies are upgraded between two git refs.
 
 Given a start and an end ref it diffs every `package.json` in the tree, resolves each changed
-package's upstream repository from the npm registry, reads its changelog file or published release
-notes from GitHub, GitLab or Bitbucket, and reports what the upgrade actually did — with a
-`BREAKING` / `ACTION REQUIRED` flag per dependency.
+package's upstream repository from the npm registry, then reads its changelog file, its published
+release notes and the commits in the range from GitHub, GitLab or Bitbucket, and reports what the
+upgrade actually did — with a `BREAKING` / `ACTION REQUIRED` flag per dependency.
 
 ```
 /deps-auditor --from v1.2.0 --to v2.0.0
@@ -36,8 +36,10 @@ without them the fetch is anonymous, which is all a public dependency needs.
 
 For each changed dependency: the old and new range, which manifests declare it, up to three
 bullets of what changed, and a `BREAKING` or `ACTION REQUIRED` flag when the changelog itself
-declares one. Dependencies with no published changelog are listed with a compare link rather than
-guessed at. Downgrades are reported in their own section.
+declares one. A dependency whose upstream publishes no changelog is read from the commits between
+its two tags, which is what covers a monorepo package that tags without writing release notes. Only
+a dependency with nothing at all is listed with a compare link rather than guessed at. Downgrades
+are reported in their own section.
 
 A range that jumps several majors covers every release in between, not just the endpoints — a
 1.x to 3.x jump still surfaces what 2.0.0 broke.

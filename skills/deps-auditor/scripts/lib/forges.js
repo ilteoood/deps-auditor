@@ -28,6 +28,8 @@ const FORGES = {
 			transport.github([`repos/${coordinates}/contents/${path}`, '-H', 'Accept: application/vnd.github.raw']),
 		listReleases: (transport, coordinates, page) =>
 			transport.github([`repos/${coordinates}/releases?per_page=${PAGE_SIZE}&page=${page}`]),
+		listCommits: (transport, coordinates, from, to, page) =>
+			transport.github([`repos/${coordinates}/compare/${from}...${to}?per_page=${PAGE_SIZE}&page=${page}`]),
 		compareUrl: (coordinates, from, to) => `https://github.com/${coordinates}/compare/${from}...${to}`
 	},
 	'gitlab.com': {
@@ -44,6 +46,11 @@ const FORGES = {
 				`https://gitlab.com/api/v4/projects/${encodeURIComponent(coordinates)}/releases?per_page=${PAGE_SIZE}&page=${page}`,
 				privateToken('GITLAB_TOKEN')
 			),
+		listCommits: (transport, coordinates, from, to, page) =>
+			transport.https(
+				`https://gitlab.com/api/v4/projects/${encodeURIComponent(coordinates)}/repository/compare?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&per_page=${PAGE_SIZE}&page=${page}`,
+				privateToken('GITLAB_TOKEN')
+			),
 		compareUrl: (coordinates, from, to) => `https://gitlab.com/${coordinates}/-/compare/${from}...${to}`
 	},
 	'bitbucket.org': {
@@ -56,6 +63,7 @@ const FORGES = {
 				bearerToken('BITBUCKET_TOKEN')
 			),
 		listReleases: null,
+		listCommits: null,
 		compareUrl: (coordinates) => `https://bitbucket.org/${coordinates}`
 	}
 }

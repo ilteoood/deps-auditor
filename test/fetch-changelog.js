@@ -364,6 +364,63 @@ function cli() {
 	assert.match(badOverride.stderr, /--file expects <package>=<path>/)
 }
 
+async function commitRange() {
+	const tagged = await collect({
+		responses: {
+			'repos/acme/widget/compare/v1.0.0...v1.1.0?per_page=100&page=1': {
+				status: 200,
+				body: JSON.stringify({
+					commits: [
+						{ sha: 'aaa', html_url: 'https://github.com/acme/widget/commit/aaa', commit: { message: 'fix: stop the leak\n\nBREAKING CHANGE: the session is now dropped on reload' } },
+						{ sha: 'bbb', commit: { message: 'chore: bump the lockfile' } }
+					]
+				})
+			}
+		}
+	})
+	assert.equal(tagged.result.status, 'fetched', 'a tag-only repository still has commits to read')
+	assert.equal(tagged.result.commits.entries.length, 2)
+	assert.equal(tagged.result.commits.entries[0].subject, 'fix: stop the leak')
+	assert.equal(tagged.result.commits.entries[0].breaking, 'the session is now dropped on reload')
+	assert.equal(tagged.result.commits.entries[1].breaking, null)
+	assert.equal(tagged.result.commits.truncated, false)
+
+	const nested = await collect({
+		repositoryUrl: 'https://gitlab.com/acme/widget.git',
+		responses: {
+			'https://gitlab.com/api/v4/projects/acme%2Fwidget/repository/compare?from=v1.0.0&to=v1.1.0&per_page=100&page=1': {
+				status: 200,
+				body: JSON.stringify([{ id: 'ccc', web_url: 'https://gitlab.com/acme/widget/-/commit/ccc', title: 'fix: the other leak', message: 'fix: the other leak' }])
+			}
+		}
+	})
+	assert.equal(nested.result.status, 'fetched', 'GitLab answers the compare with a bare array')
+	assert.equal(nested.result.commits.entries[0].subject, 'fix: the other leak')
+
+	const identical = await collect({
+		responses: {
+			'repos/acme/widget/compare/v1.0.0...v1.1.0?per_page=100&page=1': { status: 200, body: JSON.stringify({ commits: [] }) }
+		}
+	})
+	assert.equal(identical.result.commits.entries.length, 0)
+	assert.equal(identical.result.status, 'no-changelog', 'an empty range and no other source is genuinely no data')
+
+	const untagged = await collect({ readTags: () => new Map() })
+	assert.equal(untagged.result.commits, null, 'with no tag there is no range to read commits from')
+	assert.equal(untagged.result.status, 'no-changelog', 'no tag, no changelog and no releases is no data at all')
+	assert.ok(
+		!untagged.transport.calls.some((call) => call.includes('/compare/')),
+		'an absent range is not asked for, since the answer could only be a 404'
+	)
+
+	const denied = await collect({
+		responses: {
+			'repos/acme/widget/compare/v1.0.0...v1.1.0?per_page=100&page=1': { status: 403, body: '' }
+		}
+	})
+	assert.equal(denied.result.status, 'fetch-failed', 'a compare the host would not answer hides data too')
+}
+
 async function main() {
 	await github()
 	await gitlab()
@@ -374,6 +431,7 @@ async function main() {
 	await prereleaseOrdering()
 	await pagination()
 	await compareTags()
+	await commitRange()
 	tagsPreferThePackage()
 	ghExitCodeHidesStatus()
 	cli()
