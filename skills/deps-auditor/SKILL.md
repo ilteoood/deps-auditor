@@ -86,7 +86,8 @@ from or to version carries no tag.
 
 The fetcher reports what it found; it does not decide what counts as coverage. That reading is
 yours, and it is the step the whole design is built to keep. There are three sources, and a range is
-covered when any one of them accounts for it. Each result carries:
+covered when any one of them accounts for it — in the order below, since the first two are written
+for a reader and the third is not. Each result carries:
 
 - `changelog.versionsFound` — the versions its markdown headings name
 - `changelog.packageMentioned` — whether the file ever names the package you asked about
@@ -98,19 +99,19 @@ covered when any one of them accounts for it. Each result carries:
   value when its message carries a `BREAKING CHANGE:` trailer
 - `commits.truncated` — whether the range held more commits than the walk read
 
-`commits` is the source that saves a monorepo. `@react-native/*`, `appium` and the rest of a
-tag-only repository publish no release notes and keep no per-package changelog, so the first two
-sources come back empty and the commits are the only account of what moved. Read them as commits
-and not as release notes: they carry the merge, the lockfile and the CI noise alongside the fix, and
-`subject` describes one change each. A `breaking` value is a conventional-commit
-`BREAKING CHANGE:` trailer, which is the author's own declaration and the strongest signal the range
-offers — a `!` after a type in the subject says the same thing more quietly. A subject that only
-touches dependencies, formatting or the pipeline is not a change to report, and a range of a hundred
-commits is a handful of changes wearing a hundred hats.
+`commits` is the fallback, not the main course. A release body and a changelog entry are written
+for a reader; a commit subject is written for a reviewer of that one commit, and it carries the
+merge, the lockfile and the CI noise alongside the fix. Reach for it when the first two sources came
+back empty or pointed somewhere else — a repository that tags a release without publishing notes for
+it, a release body that is nothing but a link, a changelog file that turns out to describe the
+repository rather than the package. When a release body does carry the notes, summarise that and
+leave the commits alone: zod's 4.4.3 to 4.5.4 ships 58k characters of release notes and 214 commits,
+and the notes are the account of the release.
 
-The commits also answer a source that answered without content. When a release body is a link to a
-blog post, or a changelog file turned out to describe the repository rather than the package, the
-commits for the same range are already in the result — read them before concluding there is nothing.
+A `breaking` value is a conventional-commit `BREAKING CHANGE:` trailer, which is the author's own
+declaration of a breaking change — a `!` after a type in the subject says the same thing more
+quietly. A subject that only touches dependencies, formatting or the pipeline is not a change to
+report, and a range of a hundred commits is a handful of changes wearing a hundred hats.
 
 A source existing is not proof that it covers the range, so confirm what you got carries
 substantive content for versions inside it. Common ways it does not:
