@@ -3,11 +3,11 @@ name: deps-auditor
 description: >-
   Audit the dependencies that changed between two git refs. Given a start and an end commit,
   tag, branch or SHA, it diffs every package.json in the tree, resolves each changed package's
-  upstream repository from the npm registry, reads its changelog file or published release notes
-  from GitHub, GitLab or Bitbucket, and reports what each upgrade changed with a BREAKING /
-  ACTION REQUIRED flag per dependency. Use when reviewing a dependency bump, a Dependabot or
-  Renovate merge, a monorepo upgrade or a release range, or when asked what changed between two
-  versions of the dependencies.
+  upstream repository from the npm registry, reads its changelog file, its published release notes
+  and the commits in the range from GitHub, GitLab or Bitbucket, and reports what each upgrade
+  changed with a BREAKING / ACTION REQUIRED flag per dependency. Use when reviewing a dependency
+  bump, a Dependabot or Renovate merge, a monorepo upgrade or a release range, or when asked what
+  changed between two versions of the dependencies.
 disable-model-invocation: true
 ---
 
@@ -49,11 +49,11 @@ Pipe step 1 into the fetcher:
 ```
 
 It resolves each package's repository from the npm registry — the only source — then reads the
-changelog file and the release notes, and prints one `results` entry per dependency holding the
-sources themselves plus evidence about them. Do not construct a URL or a `curl` command yourself.
-Each host addresses a repository differently, and GitLab's in particular needs a path
-percent-encoded: a file that exists at `docs/CHANGELOG.md` answers 404 unless the slash is `%2F`,
-which is indistinguishable from a repository that published no changelog at all.
+changelog file, the release notes and the commits in the range, and prints one `results` entry per
+dependency holding the sources themselves plus evidence about them. Do not construct a URL or a
+`curl` command yourself. Each host addresses a repository differently, and GitLab's in particular
+needs a path percent-encoded: a file that exists at `docs/CHANGELOG.md` answers 404 unless the
+slash is `%2F`, which is indistinguishable from a repository that published no changelog at all.
 
 The supported hosts are github.com, gitlab.com and bitbucket.org. A repository on any other host,
 or on a self-hosted or enterprise instance of one of these, is reported rather than fetched.
@@ -72,19 +72,21 @@ Read `status` on each result:
 | `status` | what it means |
 | --- | --- |
 | `fetched` | at least one source returned content; judge whether it covers the range |
-| `no-changelog` | the sources were read and none carries the range |
+| `no-changelog` | every source was read and none of them carries anything about the range |
 | `no-fetch-path` | no usable `repository.url`, or an unsupported host; `reason` says which |
-| `fetch-failed` | a source could not be read; `changelog.status` and `releases.status` hold the code |
+| `fetch-failed` | a source could not be read; `changelog.status`, `releases.status` and `commits.status` hold the code |
 | `unclassified` | the range carries no comparable version, so nothing was fetched |
 
 A `no-fetch-path` result carries `reason` — `no-repository`, `unusable-url` or `unsupported-host` —
 and the `repositoryUrl` the registry gave, which is the link to show for it. `releases` is `null`
-on Bitbucket, which publishes none.
+on Bitbucket, which publishes none, and `commits` is `null` there too, as on any package whose
+from or to version carries no tag.
 
 ## 3. Judge what you fetched
 
 The fetcher reports what it found; it does not decide what counts as coverage. That reading is
-yours, and it is the step the whole design is built to keep. Each result carries:
+yours, and it is the step the whole design is built to keep. There are three sources, and a range is
+covered when any one of them accounts for it. Each result carries:
 
 - `changelog.versionsFound` — the versions its markdown headings name
 - `changelog.packageMentioned` — whether the file ever names the package you asked about
@@ -92,18 +94,37 @@ yours, and it is the step the whole design is built to keep. Each result carries
 - `releases.entries` — the releases inside the range, each with its `tag`, `version` and `body`
 - `releases.entries[].linkShare` — how much of that body is link, from 0 to 1
 - `releases.truncated` — whether the host had more releases than the walk read
+- `commits.entries` — the commits between the two tags, each with a `subject` and a `breaking`
+  value when its message carries a `BREAKING CHANGE:` trailer
+- `commits.truncated` — whether the range held more commits than the walk read
 
-Neither source existing is proof that it covers the range, so confirm what you got carries
+`commits` is the source that saves a monorepo. `@react-native/*`, `appium` and the rest of a
+tag-only repository publish no release notes and keep no per-package changelog, so the first two
+sources come back empty and the commits are the only account of what moved. Read them as commits
+and not as release notes: they carry the merge, the lockfile and the CI noise alongside the fix, and
+`subject` describes one change each. A `breaking` value is a conventional-commit
+`BREAKING CHANGE:` trailer, which is the author's own declaration and the strongest signal the range
+offers — a `!` after a type in the subject says the same thing more quietly. A subject that only
+touches dependencies, formatting or the pipeline is not a change to report, and a range of a hundred
+commits is a handful of changes wearing a hundred hats.
+
+The commits also answer a source that answered without content. When a release body is a link to a
+blog post, or a changelog file turned out to describe the repository rather than the package, the
+commits for the same range are already in the result — read them before concluding there is nothing.
+
+A source existing is not proof that it covers the range, so confirm what you got carries
 substantive content for versions inside it. Common ways it does not:
 
 - `packageMentioned` is false. The URL pointed at a repository whose changelog describes the
   repository, not the package — every `@types/*` package, which resolves to DefinitelyTyped, is
-  this case. Treat it as having no changelog rather than summarising unrelated entries.
+  this case. Treat it as having no changelog rather than summarising unrelated entries, unless the
+  commits place the package in the range.
 - `linkShare` is high. The release body points at a blog post or a changelog file instead of
-  carrying the notes, as TypeScript's and GitLab Runner's do. The notes are somewhere else; find
-  them or say there are none.
-- `truncated` is true. Releases past the walk's bound were never read, so the range may have more
-  coverage behind them than the entries show. Say so rather than reporting the walk as complete.
+  carrying the notes, as TypeScript's and GitLab Runner's do. The notes are somewhere else; read the
+  commits for the range or find them.
+- `truncated` is true. Releases or commits past the walk's bound were never read, so the range may
+  have more coverage behind them than the entries show. Say so rather than reporting the walk as
+  complete.
 - `sliced` is false. No heading range could be isolated, so the whole file is present and the
   versions in the range have to be found by reading it.
 - The file holds only an "Unreleased Changes" section, as Express's `History.md` does, or a release
@@ -114,8 +135,11 @@ so a shared prefix is no longer a bound: the `v5.` tags of a package currently o
 fall inside a 5.6 ceiling. A prerelease tag stays a prerelease when the range calls for one, and is
 otherwise left out: `v5.4-beta` is a build that `~5.4.2` never installs, not a 5.4.0 release.
 
-**If neither source covers the range**, the package goes in the "No changelog found" section with
-the compare link the result carries, and no summary.
+**Only when no source covers the range** — no changelog entry, no release note and not one commit
+between the two tags — the package goes in the "No changelog found" section with the compare link
+the result carries, and no summary. That section is a statement that nothing was found, so a range
+you have not read to the bottom does not belong in it: read the commits before you put a package
+there.
 
 ## 4. Summarise each dependency
 
@@ -183,8 +207,12 @@ name, range and flag to stdout. Without it, print the whole report and write not
   manifest change is invisible to it.
 - Only github.com, gitlab.com and bitbucket.org are read. A package on Codeberg, Gitea, a
   self-hosted GitLab or an enterprise instance of a supported forge has no fetch path.
-- Bitbucket publishes no release notes and has no compare view, so a Bitbucket dependency is read
-  from its changelog file alone and its "No changelog found" entry links the repository.
+- Bitbucket publishes no release notes, has no compare view and no commit range to read, so a
+  Bitbucket dependency is read from its changelog file alone and its "No changelog found" entry
+  links the repository.
+- A commit range is read up to 2000 commits, so a jump spanning a longer history than that reports
+  `commits.truncated` rather than pretending to be the whole range. React 17.0.2 to 18.3.1 is 1422
+  commits and reads whole; a jump across a decade of a busy repository does not.
 - A compare link is built from the repository's own tag names, and is `null` when a version was
   never published as a tag — TypeScript has no `v5.0.0`, so an audit from `~5.0.0` carries none.
   Link `repositoryUrl` in place of a null one rather than writing `[compare](null)`.
@@ -193,8 +221,10 @@ name, range and flag to stdout. Without it, print the whole report and write not
 - A host that answers 404 for a private repository to an anonymous caller cannot be told apart from
   one that has no such repository, so a private package may be reported as undocumented. Set
   `GITLAB_TOKEN` or `BITBUCKET_TOKEN` to read a private one.
-- Packages published from a monorepo, `@types/*` above all, have no changelog of their own and
-  land in the "No changelog found" section.
+- A package published from a monorepo shares its repository's commit range with every sibling, so
+  the commits between the two tags describe the whole release and not only this package. Keep the
+  entries that name the package or its area, and say so when a range is too shared to attribute.
+  `@types/*`, which resolves to DefinitelyTyped, has no changelog and no release of its own at all.
 - `peerDependencies` are not audited.
 - The changelog slice starts from the declared range's floor, which under a caret or tilde can sit
   below the version that was actually installed, so the range covered is a superset of what

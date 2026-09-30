@@ -12,6 +12,8 @@ const { PAGE_SIZE, readRepositoryUrl, resolveForge } = require('./forges')
 const { formatVersion, parseVersion } = require('./version')
 
 const MAX_RELEASE_PAGES = 50
+const MAX_COMMIT_PAGES = 20
+const BREAKING_CHANGE = /^BREAKING[ -]CHANGE:[ \t]*(.*)$/m
 
 function releaseOf(entry) {
 	const tag = entry?.tag_name
@@ -19,6 +21,15 @@ function releaseOf(entry) {
 	const version = parseVersion(tag)
 	if (version === null) return null
 	return { tag, version: formatVersion(version), body: typeof entry.description === 'string' ? entry.description : '' }
+}
+
+// GitHub nests the message under `commit`, GitLab flattens it. A tag-only repository publishes
+// neither release notes nor a changelog, and the commit subjects are then the only account of
+// what the range changed.
+function commitOf(entry) {
+	const message = entry?.commit?.message ?? entry?.message
+	if (typeof message !== 'string') return null
+	return { subject: message.split('\n')[0], breaking: BREAKING_CHANGE.exec(message)?.[1] ?? null }
 }
 
 async function readChangelog(transport, forge, coordinates, fromVersion, toVersion, override) {
@@ -64,6 +75,36 @@ async function readReleases(transport, forge, coordinates, fromVersion, toVersio
 	return { status, error, entries: inRange, truncated: status === 200 && !exhausted }
 }
 
+async function readCommits(transport, forge, coordinates, fromTag, toTag) {
+	if (forge.listCommits === null || fromTag === undefined || toTag === undefined) return null
+	const entries = []
+	let status = 404
+	let error
+	let exhausted = false
+	for (let page = 1; page <= MAX_COMMIT_PAGES; page += 1) {
+		const response = await forge.listCommits(transport, coordinates, fromTag, toTag, page)
+		status = response.status
+		error = response.error
+		if (response.status !== 200) break
+		let batch
+		try {
+			batch = JSON.parse(response.body)
+		} catch {
+			error = 'commits did not parse as JSON'
+			break
+		}
+		// GitHub answers a compare with an object holding `commits`; GitLab answers with the array.
+		const commits = Array.isArray(batch) ? batch : batch?.commits
+		if (!Array.isArray(commits)) break
+		entries.push(...commits.map(commitOf).filter((commit) => commit !== null))
+		if (commits.length < PAGE_SIZE) {
+			exhausted = true
+			break
+		}
+	}
+	return { status, error, entries, truncated: status === 200 && !exhausted }
+}
+
 function compareLink(forge, coordinates, tags, fromVersion, toVersion) {
 	if (forge.compareView === false) return forge.compareUrl(coordinates)
 	const fromTag = tags.get(fromVersion)
@@ -85,13 +126,14 @@ function describeChangelog(found, name, fromVersion, toVersion) {
 	}
 }
 
-function outcome(changelog, releases) {
+function outcome(changelog, releases, commits) {
 	if (changelog.status === 200) return 'fetched'
 	if (releases !== null && releases.status === 200 && releases.entries.length > 0) return 'fetched'
+	if (commits !== null && commits.status === 200 && commits.entries.length > 0) return 'fetched'
 	// A host answering 401 to a private project, or 429 once its rate limit is spent, means
 	// the source was not read. Calling that "no changelog" would report a silent gap as a
 	// fact about the upstream, which is the one thing this whole design exists to prevent.
-	const unreadable = [changelog.status, releases?.status].filter(
+	const unreadable = [changelog.status, releases?.status, commits?.status].filter(
 		(status) => status !== undefined && status !== 200 && status !== 404
 	)
 	return unreadable.length === 0 ? 'no-changelog' : 'fetch-failed'
@@ -120,9 +162,10 @@ async function collectNotes(change, options) {
 
 	const found = await readChangelog(options.transport, forge, coordinates, fromVersion, toVersion, options.overrides.get(name))
 	const releases = await readReleases(options.transport, forge, coordinates, fromVersion, toVersion)
+	const commits = await readCommits(options.transport, forge, coordinates, tags.get(fromVersion), tags.get(toVersion))
 	const changelog = describeChangelog(found, name, fromVersion, toVersion)
 
-	return { ...identified, status: outcome(changelog, releases), changelog, releases }
+	return { ...identified, status: outcome(changelog, releases, commits), changelog, releases, commits }
 }
 
 module.exports = { collectNotes }
