@@ -37,9 +37,7 @@ const CHANGELOG = [
 function releases(...versions) {
 	return {
 		status: 200,
-		body: JSON.stringify(
-			versions.map((version) => ({ tag_name: `v${version}`, description: `Notes for ${version}.` }))
-		)
+		body: JSON.stringify(versions.map((version) => ({ tag_name: `v${version}`, body: `Notes for ${version}.` })))
 	}
 }
 
@@ -117,6 +115,7 @@ async function github() {
 		['1.1.0', '1.0.5'],
 		'the floor is exclusive and the ceiling inclusive'
 	)
+	assert.equal(result.releases.entries[0].body, 'Notes for 1.1.0.', 'GitHub names the release notes `body`')
 	assert.equal(result.releases.entries[0].linkShare, 0)
 	assert.equal(result.releases.truncated, false, 'a short page is the end of the list')
 	assert.ok(!transport.calls.includes('repos/acme/widget/contents/changelog.md'), 'the first hit ends the candidate loop')

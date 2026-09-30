@@ -36,10 +36,10 @@ without them the fetch is anonymous, which is all a public dependency needs.
 
 For each changed dependency: the old and new range, which manifests declare it, up to three
 bullets of what changed, and a `BREAKING` or `ACTION REQUIRED` flag when the changelog itself
-declares one. A dependency whose upstream publishes no changelog is read from the commits between
-its two tags, which is what covers a monorepo package that tags without writing release notes. Only
-a dependency with nothing at all is listed with a compare link rather than guessed at. Downgrades
-are reported in their own section.
+declares one. Release notes and the changelog file are the sources it reads first; when an upstream
+publishes neither, the commits between its two tags are read instead, which is what covers a
+repository that tags a release without writing notes for it. Only a dependency with nothing at all
+is listed with a compare link rather than guessed at. Downgrades are reported in their own section.
 
 A range that jumps several majors covers every release in between, not just the endpoints — a
 1.x to 3.x jump still surfaces what 2.0.0 broke.
